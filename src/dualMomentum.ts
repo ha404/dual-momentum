@@ -1,11 +1,12 @@
+import "dotenv/config";
 import yahooFinance from "yahoo-finance2";
 import nodemailer from "nodemailer";
 
 // ---- CONFIG ----
 const ASSETS: Record<string, string> = {
-  US: "VOO",      // US Equities (S&P 500)
-  INTL: "VXUS",   // International Equities
-  BONDS: "BND",   // Bonds (safe asset)
+  US: "VOO", // US Equities (S&P 500)
+  INTL: "VXUS", // International Equities
+  BONDS: "BND", // Bonds (safe asset)
 };
 
 const LOOKBACK_MONTHS = 12;
@@ -27,7 +28,7 @@ async function getReturn(ticker: string): Promise<number> {
     interval: "1mo",
   });
 
-  let closes = history.map(h => h.adjClose).filter(Boolean) as number[];
+  let closes = history.map((h) => h.adjClose).filter(Boolean) as number[];
 
   if (SKIP_LAST_MONTH) {
     closes = closes.slice(0, -1); // drop last month
@@ -36,7 +37,7 @@ async function getReturn(ticker: string): Promise<number> {
   const startPrice = closes[0];
   const endPrice = closes[closes.length - 1];
 
-  return (endPrice / startPrice) - 1;
+  return endPrice / startPrice - 1;
 }
 
 async function momentumStrategy(): Promise<string> {
@@ -62,9 +63,7 @@ async function sendEmail(message: string): Promise<void> {
     },
   });
 
-  const subject = `Dual Momentum Rebalance - ${new Date()
-    .toISOString()
-    .slice(0, 10)}`;
+  const subject = `Dual Momentum Rebalance - ${new Date().toISOString().slice(0, 10)}`;
 
   await transporter.sendMail({
     from: EMAIL_FROM,
