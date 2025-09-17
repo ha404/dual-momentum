@@ -1,0 +1,27 @@
+name: Dual Momentum Report
+
+on:
+  schedule:
+    - cron: "0 14 1 * *"   # 1st of month, 06:00 PST (14:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Strategy
+        env:
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: npx ts-node src/dualMomentum.ts
