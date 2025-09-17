@@ -9,6 +9,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "dotenv": "^17.2.2",
     "nodemailer": "^6.9.8",
     "yahoo-finance2": "^2.12.1"
   },
