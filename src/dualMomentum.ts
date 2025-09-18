@@ -24,6 +24,22 @@ const EMAIL_FROM = requireEnv("EMAIL_FROM");
 const EMAIL_TO = requireEnv("EMAIL_TO");
 const EMAIL_PASS = requireEnv("EMAIL_PASS");
 
+// Annual taxable rebalance window config
+const TAXABLE_REBALANCE_MONTH: number = (() => {
+  const n = Number.parseInt(process.env.TAXABLE_REBALANCE_MONTH ?? "1", 10);
+  return Number.isFinite(n) && n >= 1 && n <= 12 ? n : 1; // default January
+})();
+const TAXABLE_REBALANCE_WINDOW_DAYS: number = (() => {
+  const n = Number.parseInt(process.env.TAXABLE_REBALANCE_WINDOW_DAYS ?? "7", 10);
+  return Number.isFinite(n) && n > 0 && n <= 31 ? n : 7; // default 7-day window
+})();
+
+function isInTaxableAnnualWindow(d: Date): boolean {
+  const month = d.getMonth() + 1; // 1-12
+  const day = d.getDate(); // 1-31
+  return month === TAXABLE_REBALANCE_MONTH && day <= TAXABLE_REBALANCE_WINDOW_DAYS;
+}
+
 // Type guard for numeric closes
 function isNumber(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
@@ -71,7 +87,10 @@ async function momentumStrategy(): Promise<string> {
   }
 }
 
-async function sendEmail(message: string): Promise<void> {
+async function sendEmail(
+  message: string,
+  opts?: { to?: string; subjectPrefix?: string }
+): Promise<void> {
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
@@ -80,11 +99,13 @@ async function sendEmail(message: string): Promise<void> {
     },
   });
 
-  const subject = `Dual Momentum Rebalance - ${new Date().toISOString().slice(0, 10)}`;
+  const subject = `${opts?.subjectPrefix ?? ""}Dual Momentum Rebalance - ${new Date()
+    .toISOString()
+    .slice(0, 10)}`;
 
   await transporter.sendMail({
     from: EMAIL_FROM,
-    to: EMAIL_TO,
+    to: opts?.to ?? EMAIL_TO,
     subject,
     text: message,
   });
@@ -95,6 +116,14 @@ async function sendEmail(message: string): Promise<void> {
     const rec = await momentumStrategy();
     console.log("Recommendation:", rec);
     await sendEmail(rec);
+
+    // If we're in the annual taxable rebalance window, send an extra signal
+    if (isInTaxableAnnualWindow(new Date())) {
+      const taxableMsg =
+        "Annual taxable account rebalance window is open.\n\n" +
+        `Recommendation: ${rec}`;
+      await sendEmail(taxableMsg, { subjectPrefix: "[Taxable Annual] " });
+    }
   } catch (err) {
     console.error("Error running strategy:", err);
     process.exit(1);
