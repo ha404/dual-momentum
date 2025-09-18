@@ -89,7 +89,7 @@ async function momentumStrategy(): Promise<string> {
 
 async function sendEmail(
   message: string,
-  opts?: { to?: string; subjectPrefix?: string }
+  opts?: { to?: string; subjectPrefix?: string },
 ): Promise<void> {
   const transporter = nodemailer.createTransport({
     service: "gmail",
@@ -120,8 +120,7 @@ async function sendEmail(
     // If we're in the annual taxable rebalance window, send an extra signal
     if (isInTaxableAnnualWindow(new Date())) {
       const taxableMsg =
-        "Annual taxable account rebalance window is open.\n\n" +
-        `Recommendation: ${rec}`;
+        "Annual taxable account rebalance window is open.\n\n" + `Recommendation: ${rec}`;
       await sendEmail(taxableMsg, { subjectPrefix: "[Taxable Annual] " });
     }
   } catch (err) {
