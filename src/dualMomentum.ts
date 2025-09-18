@@ -1,6 +1,7 @@
 import "dotenv/config";
 import yahooFinance from "yahoo-finance2";
 import nodemailer from "nodemailer";
+import { pathToFileURL } from "node:url";
 
 // ---- CONFIG ----
 const ASSETS = {
@@ -15,7 +16,7 @@ const LOOKBACK_MONTHS = 12;
 const SKIP_LAST_MONTH = true;
 
 // ---- EMAIL CONFIG ----
-function requireEnv(name: "EMAIL_FROM" | "EMAIL_TO" | "EMAIL_PASS"): string {
+export function requireEnv(name: "EMAIL_FROM" | "EMAIL_TO" | "EMAIL_PASS"): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
@@ -24,20 +25,20 @@ const EMAIL_FROM = requireEnv("EMAIL_FROM");
 const EMAIL_TO = requireEnv("EMAIL_TO");
 const EMAIL_PASS = requireEnv("EMAIL_PASS");
 
-// Annual taxable rebalance window config
-const TAXABLE_REBALANCE_MONTH: number = (() => {
-  const n = Number.parseInt(process.env.TAXABLE_REBALANCE_MONTH ?? "1", 10);
-  return Number.isFinite(n) && n >= 1 && n <= 12 ? n : 1; // default January
-})();
-const TAXABLE_REBALANCE_WINDOW_DAYS: number = (() => {
-  const n = Number.parseInt(process.env.TAXABLE_REBALANCE_WINDOW_DAYS ?? "7", 10);
-  return Number.isFinite(n) && n > 0 && n <= 31 ? n : 7; // default 7-day window
-})();
+// Annual taxable rebalance config is computed at call time (supports tests overriding env)
+export function getTaxableConfig(): { month: number; windowDays: number } {
+  const monthRaw = Number.parseInt(process.env.TAXABLE_REBALANCE_MONTH ?? "1", 10);
+  const windowRaw = Number.parseInt(process.env.TAXABLE_REBALANCE_WINDOW_DAYS ?? "7", 10);
+  const month = Number.isFinite(monthRaw) && monthRaw >= 1 && monthRaw <= 12 ? monthRaw : 1;
+  const windowDays = Number.isFinite(windowRaw) && windowRaw > 0 && windowRaw <= 31 ? windowRaw : 7;
+  return { month, windowDays };
+}
 
-function isInTaxableAnnualWindow(d: Date): boolean {
-  const month = d.getMonth() + 1; // 1-12
+export function isInTaxableAnnualWindow(d: Date): boolean {
+  const { month, windowDays } = getTaxableConfig();
+  const currentMonth = d.getMonth() + 1; // 1-12
   const day = d.getDate(); // 1-31
-  return month === TAXABLE_REBALANCE_MONTH && day <= TAXABLE_REBALANCE_WINDOW_DAYS;
+  return currentMonth === month && day <= windowDays;
 }
 
 // Type guard for numeric closes
@@ -73,7 +74,7 @@ async function getReturn(ticker: string): Promise<number> {
   return endPrice / startPrice - 1;
 }
 
-async function momentumStrategy(): Promise<string> {
+export async function momentumStrategy(): Promise<string> {
   const usRet = await getReturn(ASSETS.US);
   const intlRet = await getReturn(ASSETS.INTL);
 
@@ -111,7 +112,7 @@ async function sendEmail(
   });
 }
 
-(async () => {
+export async function main(): Promise<void> {
   try {
     const rec = await momentumStrategy();
     console.log("Recommendation:", rec);
@@ -127,4 +128,12 @@ async function sendEmail(
     console.error("Error running strategy:", err);
     process.exit(1);
   }
-})();
+}
+
+// Only run when executed directly (not when imported in tests)
+const thisFileUrl = import.meta.url;
+const invokedUrl = pathToFileURL(process.argv[1] || "").href;
+if (thisFileUrl === invokedUrl) {
+  // eslint-disable-next-line @typescript-eslint/no-floating-promises
+  main();
+}
