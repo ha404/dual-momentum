@@ -3,19 +3,31 @@ import yahooFinance from "yahoo-finance2";
 import nodemailer from "nodemailer";
 
 // ---- CONFIG ----
-const ASSETS: Record<string, string> = {
+const ASSETS = {
   US: "VOO", // US Equities (S&P 500)
   INTL: "VXUS", // International Equities
   BONDS: "BND", // Bonds (safe asset)
-};
+} as const;
+
+type Winner = "US" | "INTL";
 
 const LOOKBACK_MONTHS = 12;
 const SKIP_LAST_MONTH = true;
 
 // ---- EMAIL CONFIG ----
-const EMAIL_FROM = process.env.EMAIL_FROM || "";
-const EMAIL_TO = process.env.EMAIL_TO || "";
-const EMAIL_PASS = process.env.EMAIL_PASS || "";
+function requireEnv(name: "EMAIL_FROM" | "EMAIL_TO" | "EMAIL_PASS"): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required env var: ${name}`);
+  return v;
+}
+const EMAIL_FROM = requireEnv("EMAIL_FROM");
+const EMAIL_TO = requireEnv("EMAIL_TO");
+const EMAIL_PASS = requireEnv("EMAIL_PASS");
+
+// Type guard for numeric closes
+function isNumber(x: unknown): x is number {
+  return typeof x === "number" && Number.isFinite(x);
+}
 
 async function getReturn(ticker: string): Promise<number> {
   const end = new Date();
@@ -28,14 +40,19 @@ async function getReturn(ticker: string): Promise<number> {
     interval: "1mo",
   });
 
-  let closes = history.map((h) => h.adjClose).filter(Boolean) as number[];
+  // Prefer adjClose; fall back to close if needed; filter to numbers
+  let closes = history.map((h) => h.adjClose ?? h.close ?? null).filter(isNumber);
 
   if (SKIP_LAST_MONTH) {
     closes = closes.slice(0, -1); // drop last month
   }
 
-  const startPrice = closes[0];
-  const endPrice = closes[closes.length - 1];
+  if (closes.length < 2) {
+    throw new Error(`Insufficient price data for ${ticker}`);
+  }
+
+  const startPrice = closes[0]!;
+  const endPrice = closes[closes.length - 1]!;
 
   return endPrice / startPrice - 1;
 }
@@ -44,7 +61,7 @@ async function momentumStrategy(): Promise<string> {
   const usRet = await getReturn(ASSETS.US);
   const intlRet = await getReturn(ASSETS.INTL);
 
-  const winner = usRet > intlRet ? "US" : "INTL";
+  const winner: Winner = usRet > intlRet ? "US" : "INTL";
   const winnerRet = Math.max(usRet, intlRet);
 
   if (winnerRet <= 0) {
