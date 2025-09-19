@@ -17,6 +17,9 @@ type Winner = "US" | "INTL";
 
 const LOOKBACK_MONTHS = 12;
 const SKIP_LAST_MONTH = true;
+// Day of month the job is intended to run (used only for gap warning logic).
+// If you schedule the script on a different day, update this constant.
+const SCHEDULED_DAY = 5;
 
 // ---- EMAIL CONFIG ----
 export function requireEnv(name: "EMAIL_FROM" | "EMAIL_TO" | "EMAIL_PASS"): string {
@@ -106,16 +109,10 @@ export async function momentumStrategy(): Promise<MomentumResult> {
   // Absolute momentum (winner must beat risk-free)
   const absoluteFilterPassed = winnerRet > riskFreeReturn;
 
-  let recommendation: string;
-  let effectiveWinner: Winner | null = winner;
-  if (!absoluteFilterPassed) {
-    recommendation =
-      `Move to Bonds (${ASSETS.BONDS}). Absolute momentum failed: ` +
-      `${winner} 12m ${toPercent(winnerRet)} <= Risk-free (${toPercent(riskFreeReturn)}).`;
-    effectiveWinner = null;
-  } else {
-    recommendation = `Allocate 100% to ${winner} (${ASSETS[winner]}). (Beats risk-free ${toPercent(riskFreeReturn)})`;
-  }
+  const recommendation = absoluteFilterPassed
+    ? `Allocate 100% to ${winner} (${ASSETS[winner]}). (Beats risk-free ${toPercent(riskFreeReturn)})`
+    : `Move to Bonds (${ASSETS.BONDS}). Absolute momentum failed: ${winner} 12m ${toPercent(winnerRet)} <= Risk-free (${toPercent(riskFreeReturn)}).`;
+  const effectiveWinner: Winner | null = absoluteFilterPassed ? winner : null;
 
   return {
     usReturn,
@@ -155,6 +152,27 @@ export async function main(): Promise<void> {
   try {
     const result = await momentumStrategy();
 
+    // Compute days since the prior month's scheduled run date (e.g. 5th to 5th).
+    // Purpose: warn when the prior calendar month has <30 days (February) causing
+    // a potential <30-day gap that might matter for plan trade restrictions.
+    const today = new Date();
+    const prevMonthScheduled = new Date(today.getFullYear(), today.getMonth() - 1, SCHEDULED_DAY);
+    // If JS auto-adjusted (e.g. month wrap) it's fine because day=5 always exists.
+    const diffMs = today.getTime() - prevMonthScheduled.getTime();
+    const diffDays = Math.floor(diffMs / 86_400_000); // truncate toward zero
+    const gapWarning: string | null = ((): string | null => {
+      if (diffDays > 0 && diffDays < 30) {
+        const earliestOk = new Date(prevMonthScheduled.getTime() + 30 * 86_400_000);
+        const earliestOkStr = earliestOk.toISOString().slice(0, 10);
+        return (
+          `WARNING: Only ${diffDays} days since prior scheduled run (target day ${SCHEDULED_DAY}). ` +
+          "This occurs when the previous month has fewer than 30 days (e.g. February). " +
+          `If your plan enforces a 30-day trade restriction, consider waiting until ${earliestOkStr} before executing any allocation change.`
+        );
+      }
+      return null;
+    })();
+
     // These are the core outputs used for logging & emailing.
     // Returns are 12‑month total returns (skipping the current partial month) for:
     //   - US equities (VOO)
@@ -169,10 +187,13 @@ export async function main(): Promise<void> {
       `Absolute filter: ${result.absoluteFilterPassed ? "PASSED" : "FAILED"}`,
       `Recommendation: ${result.recommendation}`,
     ];
+    if (gapWarning) logLines.push(gapWarning);
     console.log(logLines.join("\n"));
 
     // Email contains concise summary only.
-    const baseEmailBody = `${logLines[0]}\n${logLines[1]}\n${logLines[2]}\n${logLines[3]}\n\n${result.recommendation}`;
+    const baseEmailBody =
+      `${logLines[0]}\n${logLines[1]}\n${logLines[2]}\n${logLines[3]}\n\n${result.recommendation}` +
+      (gapWarning ? `\n\n${gapWarning}` : "");
     await sendEmail(baseEmailBody);
 
     // If we're in the annual taxable rebalance window, send an extra signal
@@ -184,7 +205,8 @@ export async function main(): Promise<void> {
         `INTL (${ASSETS.INTL}) 12m: ${toPercent(result.intlReturn)}\n` +
         `Risk-free (${RISK_FREE_SYMBOL}) 12m: ${toPercent(result.riskFreeReturn)}\n` +
         `Absolute filter: ${result.absoluteFilterPassed ? "PASSED" : "FAILED"}\n\n` +
-        result.recommendation;
+        result.recommendation +
+        (gapWarning ? `\n\n${gapWarning}` : "");
       await sendEmail(taxableMsg, { subjectPrefix: "[Taxable Annual] " });
     }
   } catch (err) {
