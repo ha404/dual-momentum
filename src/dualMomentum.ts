@@ -7,8 +7,11 @@ import { pathToFileURL } from "node:url";
 const ASSETS = {
   US: "VOO", // US Equities (S&P 500)
   INTL: "VXUS", // International Equities
-  BONDS: "BND", // Bonds (safe asset)
+  BONDS: "BND", // Defensive (intermediate bonds)
 } as const;
+
+// Risk-free proxy for absolute momentum (T-Bills ETF)
+const RISK_FREE_SYMBOL = "BIL"; // Change to SHV, SGOV etc. if desired
 
 type Winner = "US" | "INTL";
 
@@ -74,18 +77,54 @@ async function getReturn(ticker: string): Promise<number> {
   return endPrice / startPrice - 1;
 }
 
-export async function momentumStrategy(): Promise<string> {
-  const usRet = await getReturn(ASSETS.US);
-  const intlRet = await getReturn(ASSETS.INTL);
+export interface MomentumResult {
+  usReturn: number;
+  intlReturn: number;
+  riskFreeReturn: number;
+  winner: Winner | null; // null if absolute momentum fails
+  recommendation: string;
+  absoluteFilterPassed: boolean;
+}
+// NOTE: Explanatory comments are embedded directly in the code below instead of
+// generating a beginner help section at runtime (per user preference).
 
-  const winner: Winner = usRet > intlRet ? "US" : "INTL";
-  const winnerRet = Math.max(usRet, intlRet);
+function toPercent(v: number, digits = 2): string {
+  return (v * 100).toFixed(digits) + "%";
+}
 
-  if (winnerRet <= 0) {
-    return `Move to Bonds (${ASSETS.BONDS}). Both weak.`;
+export async function momentumStrategy(): Promise<MomentumResult> {
+  const [usReturn, intlReturn, riskFreeReturn] = await Promise.all([
+    getReturn(ASSETS.US),
+    getReturn(ASSETS.INTL),
+    getReturn(RISK_FREE_SYMBOL),
+  ]);
+
+  // Relative momentum (winner among equities)
+  const winner: Winner = usReturn > intlReturn ? "US" : "INTL";
+  const winnerRet = Math.max(usReturn, intlReturn);
+
+  // Absolute momentum (winner must beat risk-free)
+  const absoluteFilterPassed = winnerRet > riskFreeReturn;
+
+  let recommendation: string;
+  let effectiveWinner: Winner | null = winner;
+  if (!absoluteFilterPassed) {
+    recommendation =
+      `Move to Bonds (${ASSETS.BONDS}). Absolute momentum failed: ` +
+      `${winner} 12m ${toPercent(winnerRet)} <= Risk-free (${toPercent(riskFreeReturn)}).`;
+    effectiveWinner = null;
   } else {
-    return `Allocate 100% to ${winner} (${ASSETS[winner]}).`;
+    recommendation = `Allocate 100% to ${winner} (${ASSETS[winner]}). (Beats risk-free ${toPercent(riskFreeReturn)})`;
   }
+
+  return {
+    usReturn,
+    intlReturn,
+    riskFreeReturn,
+    winner: effectiveWinner,
+    recommendation,
+    absoluteFilterPassed,
+  };
 }
 
 async function sendEmail(
@@ -114,14 +153,38 @@ async function sendEmail(
 
 export async function main(): Promise<void> {
   try {
-    const rec = await momentumStrategy();
-    console.log("Recommendation:", rec);
-    await sendEmail(rec);
+    const result = await momentumStrategy();
+
+    // These are the core outputs used for logging & emailing.
+    // Returns are 12‑month total returns (skipping the current partial month) for:
+    //   - US equities (VOO)
+    //   - International equities (VXUS)
+    //   - Risk‑free proxy (BIL) used for the Absolute Momentum filter.
+    // We log which equity wins on a relative basis (higher return) *and* whether
+    // that winning return beats the risk‑free return. If it does not, we move to bonds.
+    const logLines = [
+      `US (${ASSETS.US}) 12m: ${toPercent(result.usReturn)}`,
+      `INTL (${ASSETS.INTL}) 12m: ${toPercent(result.intlReturn)}`,
+      `Risk-free (${RISK_FREE_SYMBOL}) 12m: ${toPercent(result.riskFreeReturn)}`,
+      `Absolute filter: ${result.absoluteFilterPassed ? "PASSED" : "FAILED"}`,
+      `Recommendation: ${result.recommendation}`,
+    ];
+    console.log(logLines.join("\n"));
+
+    // Email contains concise summary only.
+    const baseEmailBody = `${logLines[0]}\n${logLines[1]}\n${logLines[2]}\n${logLines[3]}\n\n${result.recommendation}`;
+    await sendEmail(baseEmailBody);
 
     // If we're in the annual taxable rebalance window, send an extra signal
     if (isInTaxableAnnualWindow(new Date())) {
+      // Extra annual reminder during the configured taxable window.
       const taxableMsg =
-        "Annual taxable account rebalance window is open.\n\n" + `Recommendation: ${rec}`;
+        "Annual taxable account rebalance window is open.\n\n" +
+        `US (${ASSETS.US}) 12m: ${toPercent(result.usReturn)}\n` +
+        `INTL (${ASSETS.INTL}) 12m: ${toPercent(result.intlReturn)}\n` +
+        `Risk-free (${RISK_FREE_SYMBOL}) 12m: ${toPercent(result.riskFreeReturn)}\n` +
+        `Absolute filter: ${result.absoluteFilterPassed ? "PASSED" : "FAILED"}\n\n` +
+        result.recommendation;
       await sendEmail(taxableMsg, { subjectPrefix: "[Taxable Annual] " });
     }
   } catch (err) {
